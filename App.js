@@ -2,6 +2,22 @@ import { createClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
+// Custom button component for web
+const Button = ({ onPress, style, disabled, children }) => (
+  <button
+    onClick={onPress}
+    disabled={disabled}
+    style={{
+      border: 'none',
+      outline: 'none',
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      opacity: disabled ? 0.6 : 1,
+      ...StyleSheet.flatten(style)
+    }}
+  >
+    {children}
+  </button>
+);
 const SUPABASE_URL = 'https://kzpbsektugmaialpoehs.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt6cGJzZWt0dWdtYWlhbHBvZWhzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA3MTY1NTMsImV4cCI6MjA3NjI5MjU1M30.UZ6PhcO8zmmiaGfq3Pcs6rjWKEJQYgj16KEiwnvFOnI';
 
@@ -19,6 +35,11 @@ export default function ExpenseTracker() {
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('Food');
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [username, setUsername] = useState('');
+  const [profilePhoto, setProfilePhoto] = useState('');
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
@@ -36,6 +57,13 @@ export default function ExpenseTracker() {
       const { data, error } = await supabase.auth.getSession();
       if (data?.session) {
         setUser(data.session.user);
+        setUsername(data.session.user.user_metadata?.username || '');
+        setProfilePhoto(data.session.user.user_metadata?.profile_photo || '');
+      }
+      
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('type') === 'email' && params.get('token')) {
+        Alert.alert('Success', 'Email verified! You can now log in.');
       }
     } catch (err) {
       console.log('Error checking user:', err);
@@ -57,10 +85,13 @@ export default function ExpenseTracker() {
       if (signUpError) {
         setError(signUpError.message);
       } else {
-        Alert.alert('Success', 'Account created! Please log in.');
+        setSuccessMessage('Account created! Please check your email to verify your account.');
         setEmail('');
         setPassword('');
-        setIsLogin(true);
+        setTimeout(() => {
+          setIsLogin(true);
+          setSuccessMessage('');
+        }, 5000);
       }
     } catch (err) {
       setError('Signup failed: ' + err.message);
@@ -98,6 +129,7 @@ export default function ExpenseTracker() {
       await supabase.auth.signOut();
       setUser(null);
       setExpenses([]);
+      setShowSettings(false);
     } catch (err) {
       Alert.alert('Error', 'Logout failed: ' + err.message);
     }
@@ -169,6 +201,89 @@ export default function ExpenseTracker() {
     setDeletingId(null);
   };
 
+  const updateProfile = async () => {
+    if (!username.trim()) {
+      Alert.alert('Error', 'Username cannot be empty');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        data: { 
+          username: username,
+          profile_photo: profilePhoto 
+        }
+      });
+
+      if (error) {
+        Alert.alert('Error', error.message);
+      } else {
+        Alert.alert('Success', 'Profile updated!');
+        setShowSettings(false);
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to update profile: ' + err.message);
+    }
+  };
+
+  const handlePhotoUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      Alert.alert('Error', 'Image size must be less than 2MB');
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      Alert.alert('Error', 'Please upload an image file');
+      return;
+    }
+
+    setUploadingPhoto(true);
+
+    try {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setProfilePhoto(reader.result);
+        setUploadingPhoto(false);
+      };
+      reader.onerror = () => {
+        Alert.alert('Error', 'Failed to read image');
+        setUploadingPhoto(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      Alert.alert('Error', 'Failed to upload photo: ' + err.message);
+      setUploadingPhoto(false);
+    }
+  };
+
+  const deleteAccount = async () => {
+    Alert.alert(
+      'Delete Account',
+      'Are you sure? This will permanently delete your account and all your expenses. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await supabase.from('expenses').delete().eq('user_id', user.id);
+              await supabase.auth.signOut();
+              setUser(null);
+              setExpenses([]);
+              Alert.alert('Success', 'Account deleted successfully');
+            } catch (err) {
+              Alert.alert('Error', 'Failed to delete account: ' + err.message);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const getTotalExpenses = () => {
     return expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0).toFixed(2);
   };
@@ -236,8 +351,9 @@ export default function ExpenseTracker() {
           </View>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
+          {successMessage ? <Text style={styles.successMessage}>{successMessage}</Text> : null}
 
-          <TouchableOpacity
+          <Button
             style={styles.submitButton}
             onPress={isLogin ? handleLogin : handleSignUp}
             disabled={loading}
@@ -247,7 +363,11 @@ export default function ExpenseTracker() {
             ) : (
               <Text style={styles.submitButtonText}>{isLogin ? 'Login' : 'Create Account'}</Text>
             )}
-          </TouchableOpacity>
+          </Button>
+
+
+
+
 
           <View style={styles.divider}>
             <View style={styles.line} />
@@ -274,146 +394,281 @@ export default function ExpenseTracker() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerGreeting}>Welcome back!</Text>
-          <Text style={styles.headerEmail}>{user.email}</Text>
-        </View>
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Text style={styles.logoutButtonText}>Logout</Text>
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Total Amount Card */}
-        <View style={styles.totalCard}>
-          <View style={styles.totalCardContent}>
-            <Text style={styles.totalLabel}>Total Expenses</Text>
-            <Text style={styles.totalAmount}>₹{getTotalExpenses()}</Text>
-            <Text style={styles.totalSubtitle}>{expenses.length} transactions this month</Text>
-          </View>
-          <View style={styles.totalIcon}>
-            <Text style={styles.totalIconText}>💸</Text>
-          </View>
-        </View>
-
-        {/* Add Expense Button */}
-        <TouchableOpacity
-          style={[styles.addButton, showAddExpense && styles.addButtonActive]}
-          onPress={() => setShowAddExpense(!showAddExpense)}
-        >
-          <Text style={styles.addButtonText}>
-            {showAddExpense ? '✕ Close' : '+ Add New Expense'}
-          </Text>
-        </TouchableOpacity>
-
-        {/* Add Expense Form */}
-        {showAddExpense && (
-          <View style={styles.formCard}>
-            <Text style={styles.formTitle}>Add Expense</Text>
-
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>What did you spend on?</Text>
-              <TextInput
-                style={styles.formInput}
-                placeholder="e.g., Coffee, Gas, Movie"
-                placeholderTextColor="#999"
-                value={expenseName}
-                onChangeText={setExpenseName}
+        <View style={styles.headerLeft}>
+          {profilePhoto ? (
+            <View style={styles.headerPhotoContainer}>
+              <img 
+                src={profilePhoto} 
+                alt="Profile" 
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  borderRadius: '50%',
+                  objectFit: 'cover'
+                }}
               />
-            </View>
-
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Amount (₹)</Text>
-              <TextInput
-                style={styles.formInput}
-                placeholder="0.00"
-                placeholderTextColor="#999"
-                value={expenseAmount}
-                onChangeText={setExpenseAmount}
-                keyboardType="decimal-pad"
-              />
-            </View>
-
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Category</Text>
-              <View style={styles.categoryGrid}>
-                {categories.map((cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[
-                      styles.categoryTag,
-                      expenseCategory === cat && styles.categoryTagActive,
-                    ]}
-                    onPress={() => setExpenseCategory(cat)}
-                  >
-                    <Text style={styles.categoryEmoji}>{getCategoryEmoji(cat)}</Text>
-                    <Text
-                      style={[
-                        styles.categoryTagText,
-                        expenseCategory === cat && styles.categoryTagTextActive,
-                      ]}
-                    >
-                      {cat}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            <TouchableOpacity style={styles.submitFormButton} onPress={addExpense}>
-              <Text style={styles.submitFormButtonText}>Add Expense</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Expenses List */}
-        <View style={styles.expensesSection}>
-          <Text style={styles.sectionTitle}>Recent Transactions</Text>
-          {expenses.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateIcon}>📊</Text>
-              <Text style={styles.emptyStateText}>No expenses yet</Text>
-              <Text style={styles.emptyStateSubtext}>Start tracking your expenses</Text>
             </View>
           ) : (
-            <FlatList
-              data={expenses}
-              keyExtractor={(item) => item.id.toString()}
-              scrollEnabled={false}
-              renderItem={({ item }) => (
-                <View style={styles.expenseCard}>
-                  <View style={[styles.expenseCategoryIcon, { backgroundColor: getCategoryColor(item.category) + '20' }]}>
-                    <Text style={styles.expenseCategoryEmoji}>{getCategoryEmoji(item.category)}</Text>
-                  </View>
-                  <View style={styles.expenseInfo}>
-                    <Text style={styles.expenseName}>{item.name}</Text>
-                    <View style={styles.expenseFooter}>
-                      <Text style={styles.expenseCategory}>{item.category}</Text>
-                      <Text style={styles.expenseDate}>
-                        {new Date(item.created_at).toLocaleDateString()}
+            <View style={styles.headerPhotoContainer}>
+              <Text style={styles.headerPhotoPlaceholder}>👤</Text>
+            </View>
+          )}
+          <View>
+            <Text style={styles.headerGreeting}>Welcome back!</Text>
+            <Text style={styles.headerEmail}>{username || user.email}</Text>
+          </View>
+        </View>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity 
+            style={styles.settingsButton} 
+            onPress={() => setShowSettings(!showSettings)}
+          >
+            <Text style={styles.settingsButtonText}>⚙️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+            <Text style={styles.logoutButtonText}>Logout</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {showSettings ? (
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={styles.settingsCard}>
+            <Text style={styles.settingsTitle}>⚙️ Settings</Text>
+
+            <View style={styles.settingsSection}>
+              <Text style={styles.settingsSectionTitle}>Profile Information</Text>
+              
+              <View style={styles.photoUploadSection}>
+                <Text style={styles.formLabel}>Profile Photo</Text>
+                <View style={styles.photoUploadContainer}>
+                  {profilePhoto ? (
+                    <img 
+                      src={profilePhoto} 
+                      alt="Profile" 
+                      style={{
+                        width: 100,
+                        height: 100,
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        border: '3px solid #3B82F6'
+                      }}
+                    />
+                  ) : (
+                    <View style={styles.photoPlaceholder}>
+                      <Text style={styles.photoPlaceholderText}>📷</Text>
+                      <Text style={styles.photoPlaceholderSubtext}>No photo</Text>
+                    </View>
+                  )}
+                </View>
+                
+                <input
+                  type="file"
+                  accept="image/*"
+                  id="photo-upload"
+                  style={{ display: 'none' }}
+                  onChange={handlePhotoUpload}
+                />
+                <label htmlFor="photo-upload">
+                  <TouchableOpacity
+                    style={styles.uploadButton}
+                    onPress={() => document.getElementById('photo-upload').click()}
+                    disabled={uploadingPhoto}
+                  >
+                    {uploadingPhoto ? (
+                      <ActivityIndicator size="small" color="#3B82F6" />
+                    ) : (
+                      <Text style={styles.uploadButtonText}>
+                        {profilePhoto ? '📸 Change Photo' : '📤 Upload Photo'}
                       </Text>
+                    )}
+                  </TouchableOpacity>
+                </label>
+                {profilePhoto && (
+                  <TouchableOpacity
+                    style={styles.removePhotoButton}
+                    onPress={() => setProfilePhoto('')}
+                  >
+                    <Text style={styles.removePhotoButtonText}>Remove Photo</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Username</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Enter your name"
+                  placeholderTextColor="#999"
+                  value={username}
+                  onChangeText={setUsername}
+                />
+              </View>
+
+              <TouchableOpacity style={styles.updateButton} onPress={updateProfile}>
+                <Text style={styles.updateButtonText}>Update Profile</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.settingsSection, styles.dangerSection]}>
+              <Text style={styles.settingsSectionTitle}>Account Actions</Text>
+              
+              <TouchableOpacity 
+                style={styles.logoutFullButton} 
+                onPress={handleLogout}
+              >
+                <Text style={styles.logoutFullButtonText}>🚪 Logout</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.deleteAccountButton} 
+                onPress={deleteAccount}
+              >
+                <Text style={styles.deleteAccountButtonText}>🗑️ Delete Account</Text>
+              </TouchableOpacity>
+              
+              <Text style={styles.warningText}>
+                ⚠️ Deleting your account will permanently remove all your data
+              </Text>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.closeSettingsButton}
+              onPress={() => setShowSettings(false)}
+            >
+              <Text style={styles.closeSettingsButtonText}>Close Settings</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      ) : (
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={styles.totalCard}>
+            <View style={styles.totalCardContent}>
+              <Text style={styles.totalLabel}>Total Expenses</Text>
+              <Text style={styles.totalAmount}>₹{getTotalExpenses()}</Text>
+              <Text style={styles.totalSubtitle}>{expenses.length} transactions this month</Text>
+            </View>
+            <View style={styles.totalIcon}>
+              <Text style={styles.totalIconText}>💸</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.addButton, showAddExpense && styles.addButtonActive]}
+            onPress={() => setShowAddExpense(!showAddExpense)}
+          >
+            <Text style={styles.addButtonText}>
+              {showAddExpense ? '✕ Close' : '+ Add New Expense'}
+            </Text>
+          </TouchableOpacity>
+
+          {showAddExpense && (
+            <View style={styles.formCard}>
+              <Text style={styles.formTitle}>Add Expense</Text>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>What did you spend on?</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="e.g., Coffee, Gas, Movie"
+                  placeholderTextColor="#999"
+                  value={expenseName}
+                  onChangeText={setExpenseName}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Amount (₹)</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="0.00"
+                  placeholderTextColor="#999"
+                  value={expenseAmount}
+                  onChangeText={setExpenseAmount}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Category</Text>
+                <View style={styles.categoryGrid}>
+                  {categories.map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[
+                        styles.categoryTag,
+                        expenseCategory === cat && styles.categoryTagActive,
+                      ]}
+                      onPress={() => setExpenseCategory(cat)}
+                    >
+                      <Text style={styles.categoryEmoji}>{getCategoryEmoji(cat)}</Text>
+                      <Text
+                        style={[
+                          styles.categoryTagText,
+                          expenseCategory === cat && styles.categoryTagTextActive,
+                        ]}
+                      >
+                        {cat}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              <TouchableOpacity style={styles.submitFormButton} onPress={addExpense}>
+                <Text style={styles.submitFormButtonText}>Add Expense</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={styles.expensesSection}>
+            <Text style={styles.sectionTitle}>Recent Transactions</Text>
+            {expenses.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateIcon}>📊</Text>
+                <Text style={styles.emptyStateText}>No expenses yet</Text>
+                <Text style={styles.emptyStateSubtext}>Start tracking your expenses</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={expenses}
+                keyExtractor={(item) => item.id.toString()}
+                scrollEnabled={false}
+                renderItem={({ item }) => (
+                  <View style={styles.expenseCard}>
+                    <View style={[styles.expenseCategoryIcon, { backgroundColor: getCategoryColor(item.category) + '20' }]}>
+                      <Text style={styles.expenseCategoryEmoji}>{getCategoryEmoji(item.category)}</Text>
+                    </View>
+                    <View style={styles.expenseInfo}>
+                      <Text style={styles.expenseName}>{item.name}</Text>
+                      <View style={styles.expenseFooter}>
+                        <Text style={styles.expenseCategory}>{item.category}</Text>
+                        <Text style={styles.expenseDate}>
+                          {new Date(item.created_at).toLocaleDateString()}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.expenseRight}>
+                      <Text style={styles.expenseAmount}>₹{item.amount.toFixed(2)}</Text>
+                      <TouchableOpacity 
+                        style={[styles.deleteButton, deletingId === item.id && styles.deleteButtonLoading]}
+                        onPress={() => deleteExpense(item.id)}
+                        disabled={deletingId === item.id}
+                      >
+                        {deletingId === item.id ? (
+                          <ActivityIndicator size="small" color="#DC2626" />
+                        ) : (
+                          <Text style={styles.deleteButtonText}>×</Text>
+                        )}
+                      </TouchableOpacity>
                     </View>
                   </View>
-                  <View style={styles.expenseRight}>
-                    <Text style={styles.expenseAmount}>₹{item.amount.toFixed(2)}</Text>
-                    <TouchableOpacity 
-                      style={[styles.deleteButton, deletingId === item.id && styles.deleteButtonLoading]}
-                      onPress={() => deleteExpense(item.id)}
-                      disabled={deletingId === item.id}
-                    >
-                      {deletingId === item.id ? (
-                        <ActivityIndicator size="small" color="#DC2626" />
-                      ) : (
-                        <Text style={styles.deleteButtonText}>×</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-            />
-          )}
-        </View>
-      </ScrollView>
+                )}
+              />
+            )}
+          </View>
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -472,8 +727,8 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 10,
+    padding: 15,
     fontSize: 16,
     color: 'white',
     backgroundColor: 'rgba(255,255,255,0.1)',
@@ -526,6 +781,15 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontWeight: '500',
   },
+  successMessage: {
+    color: '#6EE7B7',
+    marginBottom: 16,
+    textAlign: 'center',
+    backgroundColor: 'rgba(16,185,129,0.15)',
+    padding: 12,
+    borderRadius: 8,
+    fontWeight: '500',
+  },
   header: {
     backgroundColor: 'white',
     paddingVertical: 16,
@@ -535,6 +799,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerPhotoContainer: {
+    width: 45,
+    height: 45,
+    borderRadius: 22.5,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  headerPhotoPlaceholder: {
+    fontSize: 24,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  settingsButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  settingsButtonText: {
+    fontSize: 20,
   },
   headerGreeting: {
     fontSize: 14,
@@ -771,6 +1067,11 @@ const styles = StyleSheet.create({
   deleteButtonLoading: {
     opacity: 0.7,
   },
+  deleteButtonText: {
+    color: '#DC2626',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
   emptyState: {
     alignItems: 'center',
     paddingVertical: 40,
@@ -790,5 +1091,140 @@ const styles = StyleSheet.create({
   emptyStateSubtext: {
     fontSize: 13,
     color: '#9CA3AF',
+  },
+  settingsCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  settingsTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  settingsSection: {
+    marginBottom: 24,
+    paddingBottom: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  dangerSection: {
+    borderBottomWidth: 0,
+  },
+  settingsSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 16,
+  },
+  photoUploadSection: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  photoUploadContainer: {
+    marginVertical: 16,
+  },
+  photoPlaceholder: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
+    borderStyle: 'dashed',
+  },
+  photoPlaceholderText: {
+    fontSize: 40,
+    marginBottom: 4,
+  },
+  photoPlaceholderSubtext: {
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
+  uploadButton: {
+    backgroundColor: '#DBEAFE',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  uploadButtonText: {
+    color: '#1E40AF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  removePhotoButton: {
+    backgroundColor: '#FEE2E2',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    marginTop: 8,
+  },
+  removePhotoButtonText: {
+    color: '#DC2626',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  updateButton: {
+    backgroundColor: '#3B82F6',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  updateButtonText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  logoutFullButton: {
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  logoutFullButtonText: {
+    color: '#374151',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  deleteAccountButton: {
+    backgroundColor: '#FEE2E2',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  deleteAccountButtonText: {
+    color: '#DC2626',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  warningText: {
+    fontSize: 12,
+    color: '#DC2626',
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  closeSettingsButton: {
+    backgroundColor: '#E5E7EB',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  closeSettingsButtonText: {
+    color: '#1F2937',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });
